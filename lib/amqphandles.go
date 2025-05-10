@@ -41,8 +41,8 @@ type Response struct {
 	header  http.Header
 }
 
-var restExchange = EnvGet("REST_REQUEST_EXCHANGE", "restRequests")
-var retryExchange = EnvGet("REST_RETRY_EXCHANGE", "restRequestsRetry")
+var restExchange = "rest"
+var retryExchange = "restRetry"
 var responseExchange = EnvGet("REST_RESPONSE_EXCHANGE", "restResponses")
 var requestQueue = EnvGet("REST_REQUEST_QUEUE", "restRequestsQueue")
 var retryQueue = EnvGet("REST_RETRY_QUEUE", "restRetryQueue")
@@ -68,10 +68,10 @@ func ConnectRabbitMQ() (*amqp091.Connection, error) {
 	var conn *amqp091.Connection
 	var err error
 
-	queueUser := EnvGet("QUEUE_USER", "guest")
-	queuePass := EnvGet("QUEUE_PASSWORD", "guest")
-	rawQueueHosts := EnvGet("QUEUE_HOSTS", "localhost:5672")
-	queueHostStrings := strings.Split(rawQueueHosts, ",")
+	queueUser := EnvGet("QUEUE_USER", "eazy")
+	queuePass := EnvGet("QUEUE_PASSWORD", "Wem0uLksAXV7Hs7bfeWdps0I3fia7SXwck8Pa2q829g9LHDVpyNbOHpKDLD4GuWn")
+	// rawQueueHosts := EnvGet("QUEUE_HOSTS", "localhost:5672")
+	queueHostStrings := []string{"rabbit-1:5672", "rabbit-2:5672", "rabbit-3:5672"}
 
 	queueHosts := make([]string, len(queueHostStrings))
 	for i, host := range queueHostStrings {
@@ -301,7 +301,7 @@ func (r *Response) Send() {
 		logger.Errorf("Failed to marshal response: %s %s", jErr, retBody)
 	}
 
-	err := r.Channel.Publish(responseExchange, r.Request.ReplyTo, false, false, amqp091.Publishing{
+	err := r.Channel.Publish(restExchange, r.Request.ReplyTo, false, false, amqp091.Publishing{
 		ContentType:   "application/json",
 		CorrelationId: r.Request.CorrelationId,
 		Body:          bodyString,

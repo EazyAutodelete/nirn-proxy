@@ -23,7 +23,7 @@ type EndpointWorkerPool struct {
 
 var endpointPools map[string]*EndpointWorkerPool
 var manager *QueueManager
-var bufferSize = 500
+var bufferSize = 5000
 
 func GetCurrentTotalWorkers() int {
 	var total int
@@ -131,6 +131,7 @@ func CreateEndpointWorker(pool *EndpointWorkerPool, id int) *EndpointWorker {
 	return &EndpointWorker{
 		id:           id,
 		busy:         false,
+		closed:       false,
 		requestQueue: make(chan *Request),
 		manager:      manager,
 	}
@@ -139,35 +140,47 @@ func CreateEndpointWorker(pool *EndpointWorkerPool, id int) *EndpointWorker {
 func AssignRequestToWorker(pool *EndpointWorkerPool, poolname string, request *Request) {
 	pool.mu.Lock()
 	for workerId, worker := range pool.workers {
-		if !worker.busy {
+		worker.mu.Lock()
+		if !worker.busy && !worker.closed {
 
 			logger.Debugf("Assigning request in %v to worker %v", poolname, workerId)
 
 			worker.busy = true
+			worker.mu.Unlock()
 			pool.mu.Unlock()
 
-			worker.requestQueue <- request
-
-			return
+			select {
+			case worker.requestQueue <- request:
+				return
+			default:
+				logger.Warnf("Worker %v requestQueue full or closed", workerId)
+				return
+			}
 		}
+		worker.mu.Unlock()
 	}
 	pool.mu.Unlock()
 
 	if len(pool.workers) < pool.maxWorkers || GetCurrentTotalWorkers() < 50 {
 		worker := CreateEndpointWorker(pool, len(pool.workers))
+
+		worker.mu.Lock()
 		worker.busy = true
+		worker.mu.Unlock()
 
 		pool.mu.Lock()
-
 		pool.workers = append(pool.workers, worker)
-
 		pool.mu.Unlock()
 
 		go Worker(worker, pool)
 
-		worker.requestQueue <- request
-
-		return
+		select {
+		case worker.requestQueue <- request:
+			return
+		default:
+			logger.Warnf("New worker requestQueue closed or full immediately")
+			return
+		}
 	}
 
 	pool.queue <- request

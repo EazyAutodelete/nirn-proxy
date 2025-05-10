@@ -94,7 +94,7 @@ func main() {
 
 	lib.InitWorkerPool(manager)
 
-	rabbitPrefetch := lib.EnvGetInt("RABBIT_PREFETCH", 512)
+	rabbitPrefetch := lib.EnvGetInt("RABBIT_PREFETCH", 2048)
 	consumeWorkers := lib.EnvGetInt("CONSUME_WORKERS", 8)
 	requestQueue := lib.EnvGet("REST_REQUEST_QUEUE", "restRequestsQueue")
 
