@@ -36,7 +36,7 @@ func Worker(w *EndpointWorker, pool *EndpointWorkerPool) {
 	}
 
 	for request := range w.requestQueue {
-		response := NewResponse(request.Channel, request)
+		response := NewResponse(request)
 
 		w.manager.DiscordRequestHandler(request, response)
 

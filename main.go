@@ -14,6 +14,7 @@ import (
 	"github.com/germanoeich/nirn-proxy/lib"
 	"github.com/hashicorp/memberlist"
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/rabbitmq/amqp091-go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -85,39 +86,37 @@ func main() {
 
 	setupLogger()
 
-	bufferSize = lib.EnvGetInt("BUFFER_SIZE", 50)
+	bufferSize = lib.EnvGetInt("BUFFER_SIZE", 520)
 	maxBearerLruSize := lib.EnvGetInt("MAX_BEARER_COUNT", 1024)
 
 	manager := lib.NewQueueManager(bufferSize, maxBearerLruSize)
 
-	conn := lib.SetupRabbitMQConnection()
+	lib.SetupRabbitMQ(100000)
 
 	lib.InitWorkerPool(manager)
 
-	rabbitPrefetch := lib.EnvGetInt("RABBIT_PREFETCH", 2048)
+	rabbitPrefetch := lib.EnvGetInt("RABBIT_PREFETCH", 50000)
 	consumeWorkers := lib.EnvGetInt("CONSUME_WORKERS", 8)
-	requestQueue := lib.EnvGet("REST_REQUEST_QUEUE", "restRequestsQueue")
 
+	lib.SetupRabbitMQ(rabbitPrefetch)
+
+	// Worker registrieren (werden sofort gestartet & bei Reconnect neu gestartet)
 	for i := 0; i < consumeWorkers; i++ {
-		time.Sleep(time.Duration(i*100) * time.Millisecond)
-		go func(id int) {
-			channel := lib.PrepareRabbitMQChannel(conn, rabbitPrefetch)
-			if channel == nil {
-				logger.Panic("Failed to create RabbitMQ channel")
-			}
+		id := i
+		lib.GetRabbit().RegisterConsumer(func(ch *amqp091.Channel) {
+			time.Sleep(time.Duration(id*100) * time.Millisecond)
 
-			msgs, err := channel.Consume(requestQueue, "", false, false, false, false, nil)
+			msgs, err := ch.Consume(lib.GetRequestQueue(), "", false, false, false, false, nil)
 			if err != nil {
 				logger.Panic(err)
 			}
 
 			for msg := range msgs {
 				logger.Debug("Consumer #" + fmt.Sprint(id) + " received message")
-				lib.SortAndDispatchMessage(channel, msg)
+				lib.SortAndDispatchMessage(msg)
 			}
-		}(i)
+		})
 	}
-
 	time.Sleep(100 * time.Millisecond)
 
 	mux := manager.CreateMux()

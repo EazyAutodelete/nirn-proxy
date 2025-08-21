@@ -23,7 +23,7 @@ type EndpointWorkerPool struct {
 
 var endpointPools map[string]*EndpointWorkerPool
 var manager *QueueManager
-var bufferSize = 5000
+var bufferSize = 100000
 
 func GetCurrentTotalWorkers() int {
 	var total int
@@ -132,14 +132,19 @@ func CreateEndpointWorker(pool *EndpointWorkerPool, id int) *EndpointWorker {
 		id:           id,
 		busy:         false,
 		closed:       false,
-		requestQueue: make(chan *Request),
+		requestQueue: make(chan *Request, 64),
 		manager:      manager,
 	}
 }
 
 func AssignRequestToWorker(pool *EndpointWorkerPool, poolname string, request *Request) {
 	pool.mu.Lock()
-	for workerId, worker := range pool.workers {
+	workers := append([]*EndpointWorker(nil), pool.workers...)
+	canGrow := (len(pool.workers) < pool.maxWorkers) && (GetCurrentTotalWorkers() < 50)
+	nextId := len(pool.workers)
+	pool.mu.Unlock()
+
+	for workerId, worker := range workers {
 		worker.mu.Lock()
 		if !worker.busy && !worker.closed {
 
@@ -147,7 +152,6 @@ func AssignRequestToWorker(pool *EndpointWorkerPool, poolname string, request *R
 
 			worker.busy = true
 			worker.mu.Unlock()
-			pool.mu.Unlock()
 
 			select {
 			case worker.requestQueue <- request:
@@ -159,23 +163,22 @@ func AssignRequestToWorker(pool *EndpointWorkerPool, poolname string, request *R
 		}
 		worker.mu.Unlock()
 	}
-	pool.mu.Unlock()
 
-	if len(pool.workers) < pool.maxWorkers || GetCurrentTotalWorkers() < 50 {
-		worker := CreateEndpointWorker(pool, len(pool.workers))
+	if canGrow {
+		newWorker := CreateEndpointWorker(pool, nextId)
 
-		worker.mu.Lock()
-		worker.busy = true
-		worker.mu.Unlock()
+		newWorker.mu.Lock()
+		newWorker.busy = true
+		newWorker.mu.Unlock()
 
 		pool.mu.Lock()
-		pool.workers = append(pool.workers, worker)
+		pool.workers = append(pool.workers, newWorker)
 		pool.mu.Unlock()
 
-		go Worker(worker, pool)
+		go Worker(newWorker, pool)
 
 		select {
-		case worker.requestQueue <- request:
+		case newWorker.requestQueue <- request:
 			return
 		default:
 			logger.Warnf("New worker requestQueue closed or full immediately")
@@ -183,12 +186,15 @@ func AssignRequestToWorker(pool *EndpointWorkerPool, poolname string, request *R
 		}
 	}
 
-	pool.queue <- request
+	select {
+	case pool.queue <- request:
+	default:
+	}
 
 }
 
-func SortAndDispatchMessage(channel *amqp091.Channel, msg amqp091.Delivery) {
-	request := NewRequest(channel, msg)
+func SortAndDispatchMessage(msg amqp091.Delivery) {
+	request := NewRequest(msg)
 	if request == nil {
 		logger.Errorf("Failed to create request from message")
 		return
